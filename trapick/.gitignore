@@ -5,7 +5,7 @@
 # Frontend (React / Node.js)
 # ==========================
 frontend/node_modules/
-frontend/build/
+/frontend/build/  # <-- Make it specific to the root 'frontend' directory
 
 # ==========================
 # Machine Learning (YOLO / datasets)
