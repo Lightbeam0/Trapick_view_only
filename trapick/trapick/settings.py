@@ -95,7 +95,7 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 # Additional locations for static files
 STATICFILES_DIRS = [
-    os.path.join(BASE_DIR, 'build/static'),  # For React static files
+    os.path.join(BASE_DIR, 'trapick', 'build', 'static'), 
 ]
 
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
