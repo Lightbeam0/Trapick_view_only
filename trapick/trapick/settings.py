@@ -51,7 +51,7 @@ ROOT_URLCONF = 'trapick.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [os.path.join(BASE_DIR, 'build')],  # Changed from 'trapick/build'
+        'DIRS': [os.path.join(BASE_DIR, 'trapick', 'build')], 
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
