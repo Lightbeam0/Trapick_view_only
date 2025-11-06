@@ -3,6 +3,8 @@ services:
     name: trapick
     env: python
     buildCommand: |
+      cd trapick
       pip install --upgrade pip setuptools wheel
       pip install -r requirements.txt
-    startCommand: gunicorn trapick.wsgi:application
+      python manage.py collectstatic --noinput
+    startCommand: cd trapick && gunicorn trapick.wsgi:application
