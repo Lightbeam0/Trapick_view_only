@@ -1,5 +1,5 @@
-// src/pages/LocationGroups.js - UPDATED WITH DATE FILTER
-import React, { useState, useEffect } from "react";
+// src/pages/LocationGroups.js - FIXED VERSION
+import React, { useState, useEffect, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import axios from "axios";
 
@@ -8,7 +8,6 @@ function LocationGroups() {
   const navigate = useNavigate();
   const [location, setLocation] = useState(null);
   const [groups, setGroups] = useState([]);
-  const [filteredGroups, setFilteredGroups] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [debugMode, setDebugMode] = useState(false);
@@ -18,7 +17,8 @@ function LocationGroups() {
   const [endDate, setEndDate] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
 
-  const fetchLocationData = async () => {
+  // FIX: Wrap functions in useCallback to stabilize dependencies
+  const fetchLocationData = useCallback(async () => {
     try {
       setLoading(true);
       console.log(`🔄 Fetching data for location ID: ${locationId}`);
@@ -34,14 +34,17 @@ function LocationGroups() {
       if (searchTerm) params.append('search', searchTerm.trim());
       params.append('location', locationId);
 
-      const locationUrl = `http://127.0.0.1:8000/api/locations/${locationId}/`;
+      // FIX: Use relative URL for production
+      const API_BASE = process.env.NODE_ENV === 'production' ? '' : 'http://127.0.0.1:8000';
+      const locationUrl = `${API_BASE}/api/locations/${locationId}/`;
+      
       console.log(`📡 Requesting location: ${locationUrl}`);
       const locationResponse = await axios.get(locationUrl);
       console.log("✅ Location response:", locationResponse.data);
       setLocation(locationResponse.data);
 
       // Fetch groups for this location with filters
-      const groupsBaseUrl = `http://127.0.0.1:8000/api/location-groups/`;
+      const groupsBaseUrl = `${API_BASE}/api/location-groups/`;
       const groupsUrl = `${groupsBaseUrl}?${params}`;
       console.log(`📡 Requesting groups with filters: ${groupsUrl}`);
 
@@ -54,7 +57,6 @@ function LocationGroups() {
         : (groupsResponse.data.results || []);
 
       setGroups(groupsData);
-      setFilteredGroups(groupsData); // Initialize filtered groups
       setError(null);
 
     } catch (err) {
@@ -64,9 +66,9 @@ function LocationGroups() {
       setLoading(false);
       console.log("🏁 Location data fetch completed");
     }
-  };
+  }, [locationId, startDate, endDate, searchTerm]); // Add dependencies
 
-  const handleFetchError = (err) => {
+  const handleFetchError = useCallback((err) => {
     let errorMessage = "Failed to load location groups";
 
     if (err.response) {
@@ -96,7 +98,7 @@ function LocationGroups() {
     }
 
     setError(errorMessage);
-  };
+  }, []);
 
   // Apply all filters
   const handleApplyFilters = () => {
@@ -112,7 +114,7 @@ function LocationGroups() {
   };
 
   // Quick date filters
-  const applyQuickFilter = (days) => {
+  const applyQuickFilter = useCallback((days) => {
     const end = new Date();
     const start = new Date();
     start.setDate(start.getDate() - days);
@@ -124,13 +126,14 @@ function LocationGroups() {
     setTimeout(() => {
       fetchLocationData();
     }, 100);
-  };
+  }, [fetchLocationData]); // Add dependency
 
   // 🔍 Debug: Check all groups in system
-  const checkAllGroups = async () => {
+  const checkAllGroups = useCallback(async () => {
     try {
       console.log("🔍 Fetching all groups for debug...");
-      const response = await axios.get('http://127.0.0.1:8000/api/location-groups/');
+      const API_BASE = process.env.NODE_ENV === 'production' ? '' : 'http://127.0.0.1:8000';
+      const response = await axios.get(`${API_BASE}/api/location-groups/`);
       const allGroups = Array.isArray(response.data) ? response.data : response.data.results || [];
       console.log(`🔍 Found ${allGroups.length} total groups in system:`, allGroups);
       
@@ -143,13 +146,14 @@ function LocationGroups() {
     } catch (err) {
       console.error("❌ Error checking debug endpoint:", err);
     }
-  };
+  }, [locationId]); // Add dependency
 
-  const viewGroupVideos = (groupId) => {
+  const viewGroupVideos = useCallback((groupId) => {
     console.log(`🎬 Navigating to group: ${groupId}`);
     navigate(`/locations/${locationId}/groups/${groupId}`);
-  };
+  }, [navigate, locationId]); // Add dependencies
 
+  // FIX: Add all dependencies to useEffect
   useEffect(() => {
     if (locationId) {
       fetchLocationData();
@@ -158,7 +162,7 @@ function LocationGroups() {
       setLoading(false);
       setError("No location ID provided in URL");
     }
-  }, [locationId]);
+  }, [locationId, fetchLocationData, checkAllGroups]); // Add missing dependencies
 
   // Calculate date range summary
   const getDateRangeSummary = () => {
@@ -247,7 +251,7 @@ function LocationGroups() {
               marginTop: '8px',
               whiteSpace: 'pre-wrap'
             }}>
-              {`fetch("http://127.0.0.1:8000/api/locations/${locationId}/").then(r => r.json()).then(console.log)`}
+              {`fetch("/api/locations/${locationId}/").then(r => r.json()).then(console.log)`}
             </code>
           </div>
         </div>

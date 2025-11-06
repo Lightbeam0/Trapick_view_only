@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import axios from "axios";
 import { Bar, Pie } from "react-chartjs-2";
 import { 
@@ -31,11 +31,6 @@ function VehiclesPassing() {
   const [locations, setLocations] = useState([]);
   const [dateRange, setDateRange] = useState("last_7_days");
 
-  useEffect(() => {
-    fetchVehicleData();
-    fetchLocations();
-  }, [timePeriod, locationFilter, dateRange]);
-
   const fetchLocations = async () => {
     try {
       const response = await axios.get("http://127.0.0.1:8000/api/locations/");
@@ -45,74 +40,79 @@ function VehiclesPassing() {
     }
   };
 
-const fetchVehicleData = async () => {
-  try {
-    setLoading(true);
-    console.log("🔄 Fetching vehicle data with filters:", { timePeriod, locationFilter, dateRange });
-    
-    // Build query parameters
-    const params = new URLSearchParams();
-    if (timePeriod && timePeriod !== "all") params.append('period', timePeriod);
-    if (locationFilter && locationFilter !== "all") params.append('location_id', locationFilter);
-    if (dateRange && dateRange !== "all") params.append('date_range', dateRange);
-    
-    const url = `http://127.0.0.1:8000/api/vehicles/?${params}`;
-    console.log("📡 API URL:", url);
-    
-    const response = await axios.get(url);
-    const apiData = response.data;
-    
-    console.log("✅ Vehicle data received:", apiData);
-    
-    if (apiData && typeof apiData === 'object') {
-      // Ensure all required fields exist
-      const validatedData = {
-        today: apiData.today || { cars: 0, trucks: 0, buses: 0, motorcycles: 0, bicycles: 0, others: 0 },
-        yesterday: apiData.yesterday || { cars: 0, trucks: 0, buses: 0, motorcycles: 0, bicycles: 0, others: 0 },
-        week: apiData.week || { cars: 0, trucks: 0, buses: 0, motorcycles: 0, bicycles: 0, others: 0 },
-        month: apiData.month || { cars: 0, trucks: 0, buses: 0, motorcycles: 0, bicycles: 0, others: 0 },
-        summary: apiData.summary || { total_analyses: 0, average_daily: 0, data_source: 'No data available' }
-      };
+  const fetchVehicleData = useCallback(async () => {
+    try {
+      setLoading(true);
+      console.log("🔄 Fetching vehicle data with filters:", { timePeriod, locationFilter, dateRange });
       
-      setVehicleData(validatedData);
-      setError(null);
-    } else {
-      console.log("❌ Invalid API response structure");
+      // Build query parameters
+      const params = new URLSearchParams();
+      if (timePeriod && timePeriod !== "all") params.append('period', timePeriod);
+      if (locationFilter && locationFilter !== "all") params.append('location_id', locationFilter);
+      if (dateRange && dateRange !== "all") params.append('date_range', dateRange);
+      
+      const url = `http://127.0.0.1:8000/api/vehicles/?${params}`;
+      console.log("📡 API URL:", url);
+      
+      const response = await axios.get(url);
+      const apiData = response.data;
+      
+      console.log("✅ Vehicle data received:", apiData);
+      
+      if (apiData && typeof apiData === 'object') {
+        // Ensure all required fields exist
+        const validatedData = {
+          today: apiData.today || { cars: 0, trucks: 0, buses: 0, motorcycles: 0, bicycles: 0, others: 0 },
+          yesterday: apiData.yesterday || { cars: 0, trucks: 0, buses: 0, motorcycles: 0, bicycles: 0, others: 0 },
+          week: apiData.week || { cars: 0, trucks: 0, buses: 0, motorcycles: 0, bicycles: 0, others: 0 },
+          month: apiData.month || { cars: 0, trucks: 0, buses: 0, motorcycles: 0, bicycles: 0, others: 0 },
+          summary: apiData.summary || { total_analyses: 0, average_daily: 0, data_source: 'No data available' }
+        };
+        
+        setVehicleData(validatedData);
+        setError(null);
+      } else {
+        console.log("❌ Invalid API response structure");
+        setVehicleData({
+          today: { cars: 0, trucks: 0, buses: 0, motorcycles: 0, bicycles: 0, others: 0 },
+          yesterday: { cars: 0, trucks: 0, buses: 0, motorcycles: 0, bicycles: 0, others: 0 },
+          week: { cars: 0, trucks: 0, buses: 0, motorcycles: 0, bicycles: 0, others: 0 },
+          month: { cars: 0, trucks: 0, buses: 0, motorcycles: 0, bicycles: 0, others: 0 },
+          summary: { total_analyses: 0, average_daily: 0, data_source: 'Invalid response format' }
+        });
+        setError("Invalid data format from server");
+      }
+      
+    } catch (err) {
+      console.error("🔴 API error:", err);
+      console.error("🔴 Error response:", err.response);
+      
+      const errorMsg = err.response?.data?.error || err.message || "Failed to load vehicle data";
+      setError(`API Error: ${errorMsg}`);
+      
+      // Set fallback data
       setVehicleData({
         today: { cars: 0, trucks: 0, buses: 0, motorcycles: 0, bicycles: 0, others: 0 },
         yesterday: { cars: 0, trucks: 0, buses: 0, motorcycles: 0, bicycles: 0, others: 0 },
         week: { cars: 0, trucks: 0, buses: 0, motorcycles: 0, bicycles: 0, others: 0 },
         month: { cars: 0, trucks: 0, buses: 0, motorcycles: 0, bicycles: 0, others: 0 },
-        summary: { total_analyses: 0, average_daily: 0, data_source: 'Invalid response format' }
+        summary: { 
+          total_analyses: 0, 
+          average_daily: 0, 
+          data_source: 'Check if videos have been processed and analyzed',
+          total_vehicles: 0,
+          unique_days: 0
+        }
       });
-      setError("Invalid data format from server");
+    } finally {
+      setLoading(false);
     }
-    
-  } catch (err) {
-    console.error("🔴 API error:", err);
-    console.error("🔴 Error response:", err.response);
-    
-    const errorMsg = err.response?.data?.error || err.message || "Failed to load vehicle data";
-    setError(`API Error: ${errorMsg}`);
-    
-    // Set fallback data
-    setVehicleData({
-      today: { cars: 0, trucks: 0, buses: 0, motorcycles: 0, bicycles: 0, others: 0 },
-      yesterday: { cars: 0, trucks: 0, buses: 0, motorcycles: 0, bicycles: 0, others: 0 },
-      week: { cars: 0, trucks: 0, buses: 0, motorcycles: 0, bicycles: 0, others: 0 },
-      month: { cars: 0, trucks: 0, buses: 0, motorcycles: 0, bicycles: 0, others: 0 },
-      summary: { 
-        total_analyses: 0, 
-        average_daily: 0, 
-        data_source: 'Check if videos have been processed and analyzed',
-        total_vehicles: 0,
-        unique_days: 0
-      }
-    });
-  } finally {
-    setLoading(false);
-  }
-};
+  }, [timePeriod, locationFilter, dateRange]);
+
+  useEffect(() => {
+    fetchVehicleData();
+    fetchLocations();
+  }, [timePeriod, locationFilter, dateRange, fetchVehicleData]);
 
   const calculateChange = (current, previous) => {
     if (!previous || previous === 0) return { value: 0, isPositive: true };

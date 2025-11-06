@@ -1,7 +1,7 @@
 // src/components/Sidebar.js - REMOVED UPLOAD MODAL AND SETTINGS
 import React from "react";
 import { Link, useLocation } from "react-router-dom";
-import { FaChartLine, FaCarSide, FaTrafficLight, FaFileAlt, FaMagic, FaMapMarkerAlt } from "react-icons/fa";
+import { FaChartLine, FaCarSide, FaTrafficLight, FaMagic, FaMapMarkerAlt } from "react-icons/fa";
 
 function Sidebar() {
   const location = useLocation();

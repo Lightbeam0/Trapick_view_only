@@ -1,5 +1,5 @@
 // src/pages/CongestedRoads.js
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import axios from "axios";
 
 function CongestedRoads() {
@@ -27,38 +27,39 @@ function CongestedRoads() {
     }
   ];
 
-  useEffect(() => {
-    const fetchCongestionData = async () => {
-      try {
-        const response = await axios.get("http://127.0.0.1:8000/api/congestion/");
-        let apiData = response.data;
+  // Move the function inside useCallback to stabilize the dependency
+  const fetchCongestionData = useCallback(async () => {
+    try {
+      const response = await axios.get("http://127.0.0.1:8000/api/congestion/");
+      let apiData = response.data;
+      
+      if (Array.isArray(apiData)) {
+        const normalizedData = apiData.map(item => ({
+          road: item.road || "Unknown Road",
+          area: item.area || "Unknown Area",
+          time: item.time || "Unknown Time",
+          congestionLevel: item.congestionLevel || "Unknown",
+          vehiclesPerHour: item.vehiclesPerHour || 0,
+          trend: item.trend || "stable"
+        }));
         
-        if (Array.isArray(apiData)) {
-          const normalizedData = apiData.map(item => ({
-            road: item.road || "Unknown Road",
-            area: item.area || "Unknown Area",
-            time: item.time || "Unknown Time",
-            congestionLevel: item.congestionLevel || "Unknown",
-            vehiclesPerHour: item.vehiclesPerHour || 0,
-            trend: item.trend || "stable"
-          }));
-          
-          setCongestionData(normalizedData);
-        } else {
-          setCongestionData(defaultCongestionData);
-        }
-        
-        setLoading(false);
-      } catch (err) {
-        console.error("API error:", err);
-        setError("Failed to load congestion data. Using sample data for demonstration.");
+        setCongestionData(normalizedData);
+      } else {
         setCongestionData(defaultCongestionData);
-        setLoading(false);
       }
-    };
+      
+      setLoading(false);
+    } catch (err) {
+      console.error("API error:", err);
+      setError("Failed to load congestion data. Using sample data for demonstration.");
+      setCongestionData(defaultCongestionData);
+      setLoading(false);
+    }
+  }, [defaultCongestionData]); // Add defaultCongestionData as dependency
 
+  useEffect(() => {
     fetchCongestionData();
-  }, []);
+  }, [fetchCongestionData]);
 
   if (loading) {
     return (
