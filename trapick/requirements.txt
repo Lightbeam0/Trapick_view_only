@@ -1,0 +1,116 @@
+# Core Django & Web
+Django==4.2.23
+djangorestframework==3.16.0
+django-cors-headers==4.7.0
+gunicorn==23.0.0
+whitenoise==6.11.0
+
+# Database
+dj-database-url==2.1.0
+psycopg2==2.9.10 # Or psycopg2-binary if needed for deployment platform
+python-dotenv==1.1.1
+
+# ASGI/Channels (Keep if you still need WebSockets for progress updates or notifications)
+# If you remove the progress WebSocket consumer, you can remove channels and channels-redis
+channels==4.3.1
+channels-redis==4.3.0 # Requires Redis - remove if not needed
+daphne==4.2.1 # ASGI server - keep if using ASGI (for WebSockets or async views)
+asgiref==3.9.1 # Core Django ASGI library, usually required
+
+# Celery (Keep if you have non-ML async tasks or if Channels/Redis is used for other async needs)
+# If Celery is only for video processing, remove these.
+celery==5.5.3
+redis==6.4.0 # Required by celery broker, channels-redis
+
+# Data Science Libraries (KEEP if services.py or views.py use numpy/pandas/scipy/sklearn for calculations)
+# If services.py only queries the DB without complex math, you might remove these.
+# numpy==1.26.4 # Often required by other libraries anyway
+# pandas==2.3.1 # Remove if not used in view-only logic
+# scipy==1.13.1 # Remove if not used in view-only logic
+# scikit-learn==1.6.1 # Remove if not used in view-only logic
+
+# Utilities (KEEP if used by views/services/models - requests, dateutil, pytz, lxml, PyYAML, tqdm, joblib)
+# Most are likely needed for general functionality.
+requests==2.32.4
+python-dateutil==2.9.0.post0
+pytz==2025.2
+lxml==6.0.2
+PyYAML==6.0.2
+tqdm==4.67.1
+joblib==1.5.2
+
+# Security
+cryptography==46.0.1
+
+# Pillow (likely needed for handling image fields or generating PDFs/PNGs)
+pillow==11.3.0
+
+# Matplotlib (likely needed for generating plots in PDF/Excel exports if view-only still exports)
+matplotlib==3.9.4
+
+# Other dependencies that might be required by the libraries above or your codebase
+# You can often remove these if they are sub-dependencies that get pulled in automatically by pip,
+# but it's safer to list them if you know they are needed.
+amqp==5.3.1
+async-timeout==5.0.1
+attrs==25.3.0
+billiard==4.2.1
+certifi==2025.7.14
+charset-normalizer==3.4.2
+click==8.1.8
+click-didyoumean==0.3.1
+click-plugins==1.1.1.2
+click-repl==0.3.0
+colorama==0.4.6
+contourpy==1.3.0
+cycler==0.12.1
+fonttools==4.59.0
+idna==3.10
+importlib-resources==6.5.2
+Jinja2==3.1.6
+kiwisolver==1.4.7
+kombu==5.5.4
+MarkupSafe==3.0.2
+msgpack==1.1.1
+packaging==25.0
+pyparsing==3.2.3
+reportlab==4.4.4 # Keep if using ExportAnalysisPDFAPI
+six==1.17.0
+sqlparse==0.5.3
+threadpoolctl==3.6.0
+typing-extensions==4.14.1
+tzdata==2025.2
+urllib3==2.5.0
+vine==5.1.0
+wcwidth==0.2.13
+zipp==3.23.0
+
+# --- REMOVED HEAVY ML DEPENDENCIES ---
+# torch==2.5.1
+# torchvision==0.20.1
+# torchaudio==2.5.1
+# ultralytics==8.3.199
+# opencv-python==4.12.0.88
+# onnxruntime==1.16.3
+# onnxslim==0.1.69
+# sympy==1.13.3
+# ultralytics-thop==2.0.14
+# openpyxl==3.1.5 # Keep if using ExportAnalysisExcelAPI, remove if not
+# polars==1.33.1 # Remove if not used in view-only logic
+# prompt-toolkit==3.0.51 # Often pulled in by django.core.management if using interactive commands, might not be needed for serving API
+# py-cpuinfo==9.0.0 # Remove if not used in view-only logic
+# fsspec==2025.7.0 # Remove if not used in view-only logic
+# humanfriendly==10.0 # Remove if not used in view-only logic
+# pyOpenSSL==25.3.0 # Remove if not used in view-only logic
+# service-identity==24.2.0 # Remove if not using Twisted
+# txaio==23.6.1 # Remove if not using autobahn
+# autobahn==24.4.2 # Remove if not using autobahn
+# Twisted==25.5.0 # Remove if not using Twisted
+# incremental==24.7.2 # Remove if not using Twisted
+# constantly==23.10.4 # Remove if not using Twisted
+# hyperlink==21.0.0 # Remove if not using Twisted
+# pyasn1==0.6.1 # Remove if not using Twisted
+# pyasn1-modules==0.4.2 # Remove if not using Twisted
+# pycparser==2.23 # Remove if not using cffi directly (often sub-dep)
+# pyreadline3==3.5.4 # Windows specific, likely not needed for deployment
+# tomli==2.2.1 # Remove if not used in view-only logic (often for TOML parsing, might be sub-dep)

@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: trapick
+    env: python
+    buildCommand: |
+      pip install --upgrade pip setuptools wheel
+      pip install -r requirements.txt
+    startCommand: gunicorn trapick.wsgi:application
