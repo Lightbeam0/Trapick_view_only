@@ -1,23 +1,122 @@
-# Videos
-*.mp4
+# ==========================
+# Database
+# ==========================
+*.sqlite3
+db.sqlite3
+*.db
+*.sqlite
+
+# ==========================
+# Python
+# ==========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ==========================
+# Environment
+# ==========================
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+pythonenv*
+
+# ==========================
+# IDE
+# ==========================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ==========================
+# OS
+# ==========================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
 
 # ==========================
 # Frontend (React / Node.js)
 # ==========================
-frontend/node_modules/
-/frontend/build/  # <-- Make it specific to the root 'frontend' directory
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.lock-wscript
+
+# React
+*/build/
+*.tgz
 
 # ==========================
-# Machine Learning (YOLO / datasets)
+# Django
 # ==========================
-# Raw datasets (too big for git)
-ml/dataset/images/
-ml/dataset/labels/
+media/
+staticfiles/
+*.log
 
 # ==========================
-# PyTorch / YOLO training outputs
+# Machine Learning & Videos
 # ==========================
+# ML Models
+*.pt
+*.pth
+*.h5
+*.pkl
+*.onnx
+*.weights
+
+# Training outputs
 runs/
 video_results/
-*.pt
+detections/
 *.cache
+
+# Videos
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+
+# Datasets
+ml/dataset/images/
+ml/dataset/labels/
+*.zip
+*.tar
+*.gz
+
+# ==========================
+# Temporary files
+# ==========================
+*.tmp
+*.temp
+.cache/
