@@ -1,4 +1,4 @@
-// src/components/Sidebar.js - REMOVED UPLOAD MODAL AND SETTINGS
+// src/components/Sidebar.js - UPDATED (HIDDEN UPLOAD & SETTINGS)
 import React from "react";
 import { Link, useLocation } from "react-router-dom";
 import { FaChartLine, FaCarSide, FaTrafficLight, FaMagic, FaMapMarkerAlt } from "react-icons/fa";
@@ -12,6 +12,7 @@ function Sidebar() {
     { path: "/congested", label: "Congested Roads", icon: <FaTrafficLight /> },
     { path: "/locations", label: "Locations", icon: <FaMapMarkerAlt /> },
     { path: "/predictions", label: "Traffic Predictions", icon: <FaMagic /> },
+    // REMOVED: Upload and Settings
   ];  
 
   return (
@@ -41,8 +42,8 @@ function Sidebar() {
       </nav>
 
       <div className="sidebar-footer">
-        <p></p>
-        <p style={{ marginTop: '4px' }}></p>
+        <p>View-Only Mode</p>
+        <p style={{ marginTop: '4px' }}>Data Analysis Only</p>
       </div>
     </div>
   );
