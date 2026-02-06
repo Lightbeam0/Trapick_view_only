@@ -1,34 +1,257 @@
-# trapickapp/api_views.py
+#trapickapp/api_views.py
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from django.http import HttpResponse, JsonResponse, FileResponse
-from django.views.static import serve
+
+from django.http import (
+    HttpResponse,
+    JsonResponse,
+    FileResponse,
+)
 from django.conf import settings
-from .models import VideoFile, TrafficAnalysis, Location
-from .serializers import *
-import threading
-from django.core.files.storage import FileSystemStorage
-from django.core.exceptions import ValidationError
-import os
 from django.utils import timezone
 from django.utils.dateparse import parse_date
-from datetime import timedelta
-from .progress import ProgressTracker
-from .models import VideoFile, TrafficAnalysis, Location, ProcessingProfile, VehicleType, Detection, TrafficReport, FrameAnalysis, HourlyTrafficSummary, DailyTrafficSummary, TrafficPrediction, SystemConfig, LocationDateGroup
+from django.core.exceptions import ValidationError
+from django.core.files.storage import FileSystemStorage
+from django.views.static import serve
 from django.db import models
 from django.db.models import Prefetch, Q, Sum
+
+# Standard Library
+import os
 import csv
 import json
-from django.http import HttpResponse
-from reportlab.pdfgen import canvas
+import threading
+from datetime import datetime, timedelta
+from io import BytesIO
+
+# Third-party
+from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-from reportlab.lib import colors
-from io import BytesIO
+from reportlab.pdfgen import canvas
+from reportlab.platypus import (
+    SimpleDocTemplate,
+    Paragraph,
+    Spacer,
+    Table,
+    TableStyle,
+)
 import openpyxl
-from datetime import datetime
+
+# Local App
+from .models import (
+    VideoFile,
+    TrafficAnalysis,
+    Location,
+    ProcessingProfile,
+    LocationDateGroup,
+    SystemConfig,
+    TrafficReport,
+    Detection,
+    VehicleType,
+    FrameAnalysis,
+    HourlyTrafficSummary,
+    DailyTrafficSummary,
+    TrafficPrediction,
+    DirectionalAnalysis,
+    CongestionEvent,
+)
+from .serializers import *
+from .tasks import process_video_task
+from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth.models import User
+from django.views.decorators.csrf import csrf_exempt
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.authtoken.models import Token
+
+
+
+class VideoUploadAPI(APIView):
+    def post(self, request):
+        print("🔍 DEBUG: VideoUploadAPI called")
+        print(f"🔍 Request FILES: {list(request.FILES.keys())}")
+        print(f"🔍 Request POST data: {request.POST}")
+
+        try:
+            if 'video' not in request.FILES:
+                return Response(
+                    {'error': 'No video file provided'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            video_file = request.FILES['video']
+            print(f"✅ Video file received: {video_file.name} ({video_file.size} bytes)")
+
+            # Validate file type
+            allowed_types = ['video/mp4', 'video/avi', 'video/mov', 'video/webm']
+            if video_file.content_type not in allowed_types:
+                return Response(
+                    {'error': 'Invalid file type. Please upload MP4, AVI, MOV, or WebM.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Validate file size
+            max_size = 2 * 1024 * 1024 * 1024  # 2GB
+            if video_file.size > max_size:
+                return Response(
+                    {'error': 'File too large. Maximum size is 2GB.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Get form data
+            title = request.POST.get('title', video_file.name)
+            location_id = request.POST.get('location_id')
+            video_date = request.POST.get('video_date')
+            video_start_time_str = request.POST.get('start_time')
+            video_end_time_str = request.POST.get('end_time')
+            processing_profile_id = request.POST.get('processing_profile_id')
+
+            # Validate required fields
+            if not location_id:
+                return Response(
+                    {'error': 'Location is required'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if not video_date:
+                return Response(
+                    {'error': 'Video recording date is required'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Validate location exists
+            try:
+                location = Location.objects.get(id=location_id)
+            except Location.DoesNotExist:
+                return Response(
+                    {'error': 'Location not found'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Validate processing profile if provided
+            processing_profile = None
+            if processing_profile_id:
+                try:
+                    processing_profile = ProcessingProfile.objects.get(id=processing_profile_id, active=True)
+                except ProcessingProfile.DoesNotExist:
+                    return Response(
+                        {'error': 'Processing profile not found or inactive'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+            # Save video file
+            fs = FileSystemStorage()
+            filename = fs.save(f'videos/{video_file.name}', video_file)
+            video_path = fs.path(filename)
+            print(f"💾 Video saved to: {video_path}")
+
+            # Parse time strings if provided
+            video_start_time_obj = None
+            video_end_time_obj = None
+
+            if video_start_time_str:
+                try:
+                    if len(video_start_time_str) == 8:  # HH:MM:SS
+                        video_start_time_obj = datetime.strptime(video_start_time_str, '%H:%M:%S').time()
+                    elif len(video_start_time_str) == 5:  # HH:MM
+                        video_start_time_obj = datetime.strptime(video_start_time_str, '%H:%M').time()
+                    else:
+                        print(f"Warning: Could not parse start time format: {video_start_time_str}")
+                except ValueError:
+                    print(f"Warning: Error parsing start time '{video_start_time_str}'")
+
+            if video_end_time_str:
+                try:
+                    if len(video_end_time_str) == 8:  # HH:MM:SS
+                        video_end_time_obj = datetime.strptime(video_end_time_str, '%H:%M:%S').time()
+                    elif len(video_end_time_str) == 5:  # HH:MM
+                        video_end_time_obj = datetime.strptime(video_end_time_str, '%H:%M').time()
+                    else:
+                        print(f"Warning: Could not parse end time format: {video_end_time_str}")
+                except ValueError:
+                    print(f"Warning: Error parsing end time '{video_end_time_str}'")
+
+            # Create video object
+            video_obj = VideoFile.objects.create(
+                filename=video_file.name,
+                file_path=filename,
+                title=title,
+                video_date=video_date,
+                video_start_time=video_start_time_obj,
+                video_end_time=video_end_time_obj,
+                processing_status='uploaded',
+                processing_progress=0,
+                processing_message='Upload complete, starting processing...',
+                uploaded_at=timezone.now(),
+                location_date_group=None  # Will be assigned after processing
+            )
+
+            # Set processing profile if provided
+            if processing_profile:
+                video_obj.processing_profile = processing_profile
+                video_obj.save()
+
+            print(f"📄 Video record created: {video_obj.id}, Start: {video_obj.video_start_time}, End: {video_obj.video_end_time}")
+
+            # Start processing immediately via Celery
+            try:
+                task = process_video_task.delay(str(video_obj.id), location_id=location_id)
+                print(f"✅ Celery task started: {task.id} for video {video_obj.id}")
+
+                response_data = {
+                    'status': 'success',
+                    'message': 'Video uploaded and processing started',
+                    'video_id': str(video_obj.id),
+                    'upload_id': str(video_obj.id),
+                    'id': str(video_obj.id),
+                    'task_id': task.id,
+                    'video_info': {
+                        'filename': video_file.name,
+                        'size': video_file.size,
+                        'type': video_file.content_type
+                    }
+                }
+
+                # Include start/end time in response if they were provided/parsed
+                if video_start_time_obj:
+                    response_data['video_info']['start_time'] = video_start_time_str
+                if video_end_time_obj:
+                    response_data['video_info']['end_time'] = video_end_time_str
+                if processing_profile:
+                    response_data['processing_profile'] = {
+                        'id': processing_profile.id,
+                        'name': processing_profile.display_name,
+                        'detector_type': processing_profile.detector_type
+                    }
+
+                print(f"📤 Sending response with video_id: {video_obj.id}")
+                return Response(response_data)
+
+            except Exception as e:
+                print(f"❌ Error starting Celery processing: {str(e)}")
+                video_obj.processing_status = 'failed'
+                video_obj.save()
+                return Response(
+                    {'error': f'Failed to start processing: {str(e)}'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+
+        except ValidationError as ve:
+            print(f"Validation error: {ve}")
+            return Response(
+                {'error': f'Validation error: {str(ve)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            print(f"💥 UPLOAD ERROR: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return Response(
+                {'error': f'Upload failed: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class LocationDateGroupListAPI(APIView):
@@ -46,6 +269,7 @@ class LocationDateGroupListAPI(APIView):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
 
 class LocationDateGroupDetailAPI(APIView):
     """Handle individual location-date group operations"""
@@ -87,6 +311,7 @@ class LocationDateGroupDetailAPI(APIView):
         
         group.delete()
         return Response({'message': 'Group deleted successfully'}, status=status.HTTP_204_NO_CONTENT)
+
 
 class GroupVideosAPI(APIView):
     """Add/remove videos from location-date groups"""
@@ -150,6 +375,7 @@ class GroupVideosAPI(APIView):
         except LocationDateGroup.DoesNotExist:
             return Response({'error': 'Group not found'}, status=status.HTTP_404_NOT_FOUND)
 
+
 class UngroupedVideosAPI(APIView):
     """Get videos that are not in any group"""
     
@@ -161,6 +387,7 @@ class UngroupedVideosAPI(APIView):
         
         serializer = VideoFileSerializer(videos, many=True)
         return Response(serializer.data)
+
 
 class GroupAnalysisAPI(APIView):
     """Get aggregated analysis for a location-date group"""
@@ -230,16 +457,20 @@ class GroupAnalysisAPI(APIView):
                 return level
         return 'severe'
 
+
 class AnalysisOverviewAPI(APIView):
     def get(self, request):
         """Provide overview data for the Home page with REAL data"""
         from .services import calculate_real_weekly_data, get_system_overview_stats, get_peak_hours_analysis
         
         try:
-            # Get real data
-            weekly_data = calculate_real_weekly_data()
-            system_stats = get_system_overview_stats()
-            areas_data = get_peak_hours_analysis()
+            # Get query parameters for location filtering
+            location_id = request.query_params.get('location_id', 'all')
+            
+            # Use services that support location filtering
+            weekly_data = calculate_real_weekly_data(location_id=location_id)
+            system_stats = get_system_overview_stats(location_id=location_id)
+            areas_data = get_peak_hours_analysis(location_id=location_id)
             
             # Ensure weekly_data is always a 7-element array
             if not weekly_data or len(weekly_data) != 7:
@@ -248,11 +479,6 @@ class AnalysisOverviewAPI(APIView):
             total_vehicles = sum(weekly_data)
             
             # Ensure we have valid peak hour data
-            peak_hour = '8:00 AM'
-            if system_stats.get('peak_hour'):
-                peak_hour = system_stats['peak_hour']
-            
-            # Ensure we have valid areas data
             if not areas_data:
                 areas_data = [
                     {
@@ -269,7 +495,7 @@ class AnalysisOverviewAPI(APIView):
                 'weekly_data': weekly_data,
                 'total_vehicles': total_vehicles,
                 'congested_roads': system_stats.get('congested_roads', 0),
-                'peak_hour': peak_hour,
+                'peak_hour': system_stats.get('peak_hour', 'N/A'),
                 'daily_average': total_vehicles // 7 if total_vehicles > 0 else 0,
                 'system_stats': system_stats,
                 'areas': areas_data
@@ -293,48 +519,8 @@ class AnalysisOverviewAPI(APIView):
                 'system_stats': {},
                 'areas': [],
                 'error': 'Error loading data'
-            }, status=200)  # Still return 200 to prevent frontend error
+            }, status=200)
 
-    def get_real_areas_data(self):
-        """Get real area data from recent analyses"""
-        try:
-            recent_analyses = TrafficAnalysis.objects.filter(
-                location__isnull=False
-            ).select_related('location').order_by('-analyzed_at')[:5]
-            
-            areas = []
-            for analysis in recent_analyses:
-                # Calculate metrics for this area
-                video_duration_hours = analysis.video_file.duration_seconds / 3600 if analysis.video_file.duration_seconds else 1
-                vehicles_per_hour = analysis.total_vehicles / video_duration_hours if video_duration_hours > 0 else 0
-                
-                areas.append({
-                    'name': analysis.location.display_name,
-                    'morning_peak': '7:30 - 9:00 AM',
-                    'evening_peak': '4:30 - 6:30 PM',
-                    'morning_volume': int(vehicles_per_hour * 0.4),
-                    'evening_volume': int(vehicles_per_hour * 0.35),
-                    'total_analysis_vehicles': analysis.total_vehicles
-                })
-            
-            # If no real data, return empty
-            if not areas:
-                return [
-                    {
-                        'name': 'No data available',
-                        'morning_peak': 'N/A',
-                        'evening_peak': 'N/A', 
-                        'morning_volume': 0,
-                        'evening_volume': 0,
-                        'total_analysis_vehicles': 0
-                    }
-                ]
-            
-            return areas
-            
-        except Exception as e:
-            print(f"Error getting areas data: {e}")
-            return []
 
 class VehicleStatsAPI(APIView):
     def get(self, request):
@@ -357,6 +543,7 @@ class VehicleStatsAPI(APIView):
                 'summary': {'total_analyses': 0, 'average_daily': 0, 'data_source': 'Error loading data'}
             })
 
+
 class CongestionDataAPI(APIView):
     def get(self, request):
         """Provide congestion data with REAL data"""
@@ -368,6 +555,7 @@ class CongestionDataAPI(APIView):
         except Exception as e:
             print(f"Error calculating congestion data: {e}")
             return Response([])  # Return empty array instead of fake data
+
 
 class DebugDataAPI(APIView):
     """Debug endpoint to check what data exists"""
@@ -386,6 +574,48 @@ class DebugDataAPI(APIView):
         return Response(stats)
 
 
+class VideoProgressAPI(APIView):
+    """Simple progress API that just reads from database"""
+    
+    def get(self, request, video_id):
+        try:
+            video = VideoFile.objects.get(id=video_id)
+            
+            return Response({
+                'progress': video.processing_progress,
+                'message': video.processing_message,
+                'status': video.processing_status,
+                'filename': video.filename,
+                'title': video.title,
+                'last_update': video.last_progress_update.isoformat()
+            })
+            
+        except VideoFile.DoesNotExist:
+            return Response({'error': 'Video not found'}, status=404)
+
+
+class ActiveVideosProgressAPI(APIView):
+    """Get progress for all active videos"""
+    
+    def get(self, request):
+        # Get videos that are currently processing or uploaded
+        active_videos = VideoFile.objects.filter(
+            processing_status__in=['uploaded', 'processing']
+        ).only('id', 'filename', 'title', 'processing_progress', 'processing_message', 'processing_status')
+        
+        progress_data = {}
+        for video in active_videos:
+            progress_data[str(video.id)] = {
+                'progress': video.processing_progress,
+                'message': video.processing_message,
+                'status': video.processing_status,
+                'filename': video.filename,
+                'title': video.title or video.filename
+            }
+        
+        return Response(progress_data)
+
+
 class AnalysisResultsAPI(APIView):
     def get(self, request, upload_id):
         try:
@@ -400,13 +630,24 @@ class AnalysisResultsAPI(APIView):
             # Check if analysis exists
             if hasattr(video_obj, 'traffic_analysis'):
                 analysis = video_obj.traffic_analysis
+                
+                # CREATE location_info FIRST
+                location_info = None
+                if analysis.location:
+                    location_info = {
+                        'id': analysis.location.id,
+                        'display_name': analysis.location.display_name,
+                        'name': analysis.location.name
+                    }
+                
                 analysis_data = {
                     'total_vehicles': analysis.total_vehicles,
                     'vehicle_breakdown': analysis.get_vehicle_breakdown(),
                     'processing_time': analysis.processing_time_seconds,
                     'congestion_level': analysis.congestion_level,
                     'traffic_pattern': analysis.traffic_pattern,
-                    'analyzed_at': analysis.analyzed_at.isoformat()
+                    'analyzed_at': analysis.analyzed_at.isoformat(),
+                    'location': location_info  # NOW THIS IS DEFINED
                 }
                 
                 serializer = AnalysisSummarySerializer(analysis_data)
@@ -431,11 +672,13 @@ class AnalysisResultsAPI(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
+
 class VideoListAPI(APIView):
     def get(self, request):
         videos = VideoFile.objects.all().order_by('-uploaded_at')
         serializer = VideoFileSerializer(videos, many=True)
         return Response(serializer.data)
+
 
 class LocationListAPI(APIView):
     """Handle location listing and creation"""
@@ -453,6 +696,7 @@ class LocationListAPI(APIView):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
 
 class LocationDetailAPI(APIView):
     """Handle individual location operations (GET, PUT, DELETE)"""
@@ -501,6 +745,7 @@ class LocationDetailAPI(APIView):
         location.delete()
         return Response({'message': 'Location deleted successfully'}, status=status.HTTP_204_NO_CONTENT)
 
+
 class ProcessingProfileListAPI(APIView):
     """Handle processing profile listing and creation"""
     
@@ -517,6 +762,7 @@ class ProcessingProfileListAPI(APIView):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
 
 class ProcessingProfileDetailAPI(APIView):
     """Handle individual processing profile operations"""
@@ -562,6 +808,7 @@ class ProcessingProfileDetailAPI(APIView):
         profile.delete()
         return Response({'message': 'Processing profile deleted successfully'}, status=status.HTTP_204_NO_CONTENT)
 
+
 class HealthCheckAPI(APIView):
     def get(self, request):
         return Response({
@@ -570,7 +817,8 @@ class HealthCheckAPI(APIView):
             'video_count': VideoFile.objects.count(),
             'analysis_count': TrafficAnalysis.objects.count()
         })
-            
+
+
 class ProcessedVideoViewAPI(APIView):
     def get(self, request, video_id):
         """
@@ -639,6 +887,7 @@ class ProcessedVideoViewAPI(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+
 class ProcessedVideoDownloadAPI(APIView):
     def get(self, request, video_id):
         """Download processed video file"""
@@ -678,6 +927,7 @@ class ProcessedVideoDownloadAPI(APIView):
         except Exception as e:
             print(f"Error serving video download: {e}")
             return Response({'error': 'Error serving video file'}, status=500)
+
 
 class ProcessedVideoDirectAPI(APIView):
     def get(self, request, video_id):
@@ -732,241 +982,12 @@ class ProcessedVideoDirectAPI(APIView):
                 {'error': 'Error serving video file'}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-        
-class ExportAnalysisCSVAPI(APIView):
-    def get(self, request, video_id):
-        """Export analysis data as CSV"""
-        try:
-            video_obj = VideoFile.objects.get(id=video_id)
-            
-            if not hasattr(video_obj, 'traffic_analysis'):
-                return Response({'error': 'No analysis data available'}, status=404)
-            
-            analysis = video_obj.traffic_analysis
-            
-            # Create CSV response
-            response = HttpResponse(content_type='text/csv')
-            response['Content-Disposition'] = f'attachment; filename="analysis_{video_obj.filename}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv"'
-            
-            writer = csv.writer(response)
-            
-            # Write header
-            writer.writerow(['Traffic Analysis Report', f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'])
-            writer.writerow(['Video File:', video_obj.filename])
-            writer.writerow(['Upload Date:', video_obj.uploaded_at.strftime("%Y-%m-%d %H:%M:%S")])
-            writer.writerow(['Duration:', f"{video_obj.duration_seconds or 0} seconds"])
-            writer.writerow([])
-            
-            # Summary section
-            writer.writerow(['SUMMARY'])
-            writer.writerow(['Total Vehicles:', analysis.total_vehicles])
-            writer.writerow(['Processing Time:', f"{analysis.processing_time_seconds} seconds"])
-            writer.writerow(['Congestion Level:', analysis.congestion_level])
-            writer.writerow(['Traffic Pattern:', analysis.traffic_pattern])
-            writer.writerow([])
-            
-            # Vehicle breakdown
-            writer.writerow(['VEHICLE BREAKDOWN'])
-            writer.writerow(['Vehicle Type', 'Count'])
-            writer.writerow(['Cars', analysis.car_count])
-            writer.writerow(['Trucks', analysis.truck_count])
-            writer.writerow(['Motorcycles', analysis.motorcycle_count])
-            writer.writerow(['Buses', analysis.bus_count])
-            writer.writerow(['Bicycles', analysis.bicycle_count])
-            writer.writerow(['Others', analysis.other_count])
-            writer.writerow([])
-            
-            # Metrics
-            writer.writerow(['METRICS'])
-            writer.writerow(['Peak Traffic:', analysis.peak_traffic])
-            writer.writerow(['Average Traffic:', analysis.average_traffic])
-            
-            return response
-            
-        except VideoFile.DoesNotExist:
-            return Response({'error': 'Video not found'}, status=404)
-        except Exception as e:
-            return Response({'error': str(e)}, status=500)
 
-class ExportAnalysisPDFAPI(APIView):
-    def get(self, request, video_id):
-        """Export analysis data as PDF"""
-        try:
-            video_obj = VideoFile.objects.get(id=video_id)
-            
-            if not hasattr(video_obj, 'traffic_analysis'):
-                return Response({'error': 'No analysis data available'}, status=404)
-            
-            analysis = video_obj.traffic_analysis
-            
-            # Create PDF in memory
-            buffer = BytesIO()
-            doc = SimpleDocTemplate(buffer, pagesize=letter)
-            styles = getSampleStyleSheet()
-            
-            # Create custom styles
-            title_style = ParagraphStyle(
-                'CustomTitle',
-                parent=styles['Heading1'],
-                fontSize=16,
-                spaceAfter=30,
-                textColor=colors.HexColor('#1e40af')
-            )
-            
-            heading_style = ParagraphStyle(
-                'CustomHeading',
-                parent=styles['Heading2'],
-                fontSize=12,
-                spaceAfter=12,
-                textColor=colors.HexColor('#374151')
-            )
-            
-            # Build PDF content
-            content = []
-            
-            # Title
-            content.append(Paragraph('Traffic Analysis Report', title_style))
-            content.append(Paragraph(f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}', styles['Normal']))
-            content.append(Spacer(1, 20))
-            
-            # Video Information
-            content.append(Paragraph('Video Information', heading_style))
-            video_info = [
-                ['Filename:', video_obj.filename],
-                ['Upload Date:', video_obj.uploaded_at.strftime("%Y-%m-%d %H:%M:%S")],
-                ['Duration:', f"{video_obj.duration_seconds or 0} seconds"],
-                ['Processing Status:', video_obj.processing_status]
-            ]
-            video_table = Table(video_info, colWidths=[150, 300])
-            video_table.setStyle(TableStyle([
-                ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
-                ('FONTSIZE', (0, 0), (-1, -1), 10),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-            ]))
-            content.append(video_table)
-            content.append(Spacer(1, 20))
-            
-            # Analysis Summary
-            content.append(Paragraph('Analysis Summary', heading_style))
-            summary_data = [
-                ['Total Vehicles:', str(analysis.total_vehicles)],
-                ['Processing Time:', f"{analysis.processing_time_seconds} seconds"],
-                ['Congestion Level:', analysis.congestion_level],
-                ['Traffic Pattern:', analysis.traffic_pattern]
-            ]
-            summary_table = Table(summary_data, colWidths=[150, 300])
-            summary_table.setStyle(TableStyle([
-                ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, -1), 10),
-                ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#f3f4f6')),
-            ]))
-            content.append(summary_table)
-            content.append(Spacer(1, 20))
-            
-            # Vehicle Breakdown
-            content.append(Paragraph('Vehicle Breakdown', heading_style))
-            vehicle_data = [
-                ['Vehicle Type', 'Count'],
-                ['Cars', str(analysis.car_count)],
-                ['Trucks', str(analysis.truck_count)],
-                ['Motorcycles', str(analysis.motorcycle_count)],
-                ['Buses', str(analysis.bus_count)],
-                ['Bicycles', str(analysis.bicycle_count)],
-                ['Other Vehicles', str(analysis.other_count)]
-            ]
-            vehicle_table = Table(vehicle_data, colWidths=[200, 100])
-            vehicle_table.setStyle(TableStyle([
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3b82f6')),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-                ('FONTSIZE', (0, 0), (-1, -1), 10),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f9fafb')])
-            ]))
-            content.append(vehicle_table)
-            
-            # Build PDF
-            doc.build(content)
-            
-            # Get PDF value from buffer
-            pdf = buffer.getvalue()
-            buffer.close()
-            
-            # Create HTTP response
-            response = HttpResponse(content_type='application/pdf')
-            response['Content-Disposition'] = f'attachment; filename="analysis_{video_obj.filename}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf"'
-            response.write(pdf)
-            
-            return response
-            
-        except VideoFile.DoesNotExist:
-            return Response({'error': 'Video not found'}, status=404)
-        except Exception as e:
-            return Response({'error': str(e)}, status=500)
 
-class ExportAnalysisExcelAPI(APIView):
-    def get(self, request, video_id):
-        """Export analysis data as Excel"""
-        try:
-            video_obj = VideoFile.objects.get(id=video_id)
-            
-            if not hasattr(video_obj, 'traffic_analysis'):
-                return Response({'error': 'No analysis data available'}, status=404)
-            
-            analysis = video_obj.traffic_analysis
-            
-            # Create Excel workbook
-            wb = openpyxl.Workbook()
-            ws = wb.active
-            ws.title = "Traffic Analysis"
-            
-            # Add headers and data
-            ws.append(['Traffic Analysis Report', f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'])
-            ws.append(['Video File:', video_obj.filename])
-            ws.append([])
-            
-            # Summary section
-            ws.append(['SUMMARY'])
-            ws.append(['Total Vehicles:', analysis.total_vehicles])
-            ws.append(['Processing Time:', analysis.processing_time_seconds])
-            ws.append(['Congestion Level:', analysis.congestion_level])
-            ws.append([])
-            
-            # Vehicle breakdown
-            ws.append(['VEHICLE BREAKDOWN'])
-            ws.append(['Vehicle Type', 'Count'])
-            ws.append(['Cars', analysis.car_count])
-            ws.append(['Trucks', analysis.truck_count])
-            ws.append(['Motorcycles', analysis.motorcycle_count])
-            ws.append(['Buses', analysis.bus_count])
-            ws.append(['Bicycles', analysis.bicycle_count])
-            ws.append(['Others', analysis.other_count])
-            
-            # Save to BytesIO
-            buffer = BytesIO()
-            wb.save(buffer)
-            buffer.seek(0)
-            
-            # Create HTTP response
-            response = HttpResponse(
-                buffer.getvalue(),
-                content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-            )
-            response['Content-Disposition'] = f'attachment; filename="analysis_{video_obj.filename}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx"'
-            
-            return response
-            
-        except VideoFile.DoesNotExist:
-            return Response({'error': 'Video not found'}, status=404)
-        except Exception as e:
-            return Response({'error': str(e)}, status=500)
-        
 class GeneratePredictionsAPI(APIView):
     def post(self, request):
         try:
-            from .services import generate_traffic_predictions  # Use the new function
+            from .services import generate_traffic_predictions
 
             location_id = request.data.get('location_id')
             days_ahead = int(request.data.get('days_ahead', 7))
@@ -987,6 +1008,7 @@ class GeneratePredictionsAPI(APIView):
                 'status': 'error',
                 'message': f'Failed to generate predictions: {str(e)}'
             }, status=500)
+
 
 class GetPredictionsAPI(APIView):
     """Get traffic predictions for a specific date"""
@@ -1020,6 +1042,7 @@ class GetPredictionsAPI(APIView):
                 'message': f'Failed to get predictions: {str(e)}'
             }, status=500)
 
+
 class PeakHoursPredictionAPI(APIView):
     """Get predicted peak traffic hours"""
     
@@ -1049,6 +1072,7 @@ class PeakHoursPredictionAPI(APIView):
                 'status': 'error', 
                 'message': f'Failed to get peak hours: {str(e)}'
             }, status=500)
+
 
 class PredictionInsightsAPI(APIView):
     """Get overall prediction insights and trends based on actual patterns"""
@@ -1126,8 +1150,8 @@ class PredictionInsightsAPI(APIView):
                 'status': 'error',
                 'message': f'Failed to get insights: {str(e)}'
             }, status=500)
-        
-    
+
+
 class AllGroupsAPI(APIView):
     """Get all location-date groups with summary data - FIXED VERSION"""
     
@@ -1195,7 +1219,8 @@ class AllGroupsAPI(APIView):
             import traceback
             traceback.print_exc()
             return Response({'error': str(e)}, status=500)
-        
+
+
 class GroupAnalysisDetailAPI(APIView):
     """Get detailed analysis for a specific location-date group"""
     
@@ -1320,7 +1345,8 @@ class GroupAnalysisDetailAPI(APIView):
             if avg_score <= score:
                 return level
         return 'severe'
-    
+
+
 class LocationGroupsAPI(APIView):
     """Get all groups for a specific location with filtering support"""
     
@@ -1421,6 +1447,7 @@ class LocationGroupsAPI(APIView):
             traceback.print_exc()
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+
 class LocationGroupVideosAPI(APIView):
     """Get all videos for a specific location group - FIXED VERSION"""
     
@@ -1434,7 +1461,7 @@ class LocationGroupVideosAPI(APIView):
     
     def get(self, request, location_id, group_id):
         try:
-            print(f"🔍 [LocationGroupVideosAPI] GET - Fetching videos for location {location_id}, group {group_id}")
+            print(f"🔍 [LocationGroupVideosAPI] Fetching videos for location {location_id}, group {group_id}")
             
             # Verify the group belongs to the specified location
             group = LocationDateGroup.objects.select_related('location').get(
@@ -1444,51 +1471,111 @@ class LocationGroupVideosAPI(APIView):
             
             print(f"✅ [LocationGroupVideosAPI] Found group: {group.location.display_name} - {group.date}")
             
-            # Get videos sorted by start time
+            # Get videos sorted by start time with their analyses
             videos = group.videos.filter(
                 processing_status='completed'
-            ).order_by('video_start_time')
+            ).select_related('traffic_analysis').order_by('video_start_time')
             
             print(f"✅ [LocationGroupVideosAPI] Found {videos.count()} videos")
             
             videos_data = []
+            total_vehicles = 0
+            
             for video in videos:
-                video_analysis = TrafficAnalysis.objects.filter(video_file=video).first()
+                video_analysis = None
+                analysis_data = {}
                 
-                # Build video data with proper error handling
+                # Try to get traffic analysis
+                if hasattr(video, 'traffic_analysis'):
+                    video_analysis = video.traffic_analysis
+                    
+                    # Extract comprehensive analysis data
+                    analysis_data = {
+                        'total_vehicles': video_analysis.total_vehicles,
+                        'car_count': video_analysis.car_count,
+                        'truck_count': video_analysis.truck_count,
+                        'motorcycle_count': video_analysis.motorcycle_count,
+                        'bus_count': video_analysis.bus_count,
+                        'bicycle_count': video_analysis.bicycle_count,
+                        'other_count': video_analysis.other_count,
+                        'congestion_level': video_analysis.congestion_level,
+                        'traffic_pattern': video_analysis.traffic_pattern,
+                        'peak_traffic': video_analysis.peak_traffic,
+                        'average_traffic': video_analysis.average_traffic,
+                        'processing_time_seconds': video_analysis.processing_time_seconds,
+                        'analyzed_at': video_analysis.analyzed_at.isoformat() if video_analysis.analyzed_at else None,
+                        
+                        # Directional data
+                        'directional_count': video_analysis.directional_count,
+                        'directional_vehicles_per_minute': video_analysis.directional_vehicles_per_minute,
+                        'peak_directional_flow': video_analysis.peak_directional_flow,
+                        
+                        # Congestion data
+                        'congestion_events_count': video_analysis.congestion_events_count,
+                        'total_congestion_time': video_analysis.total_congestion_time,
+                        'congestion_percentage': video_analysis.congestion_percentage,
+                        
+                        # Model info
+                        'model_info': video_analysis.get_model_info(),
+                        'vehicle_breakdown': video_analysis.get_vehicle_breakdown(),
+                        'metrics_summary': video_analysis.metrics_summary or {},
+                        
+                        # Analysis metadata
+                        'duration_seconds': video_analysis.duration_seconds,
+                        'fps': video_analysis.fps,
+                        'total_frames': video_analysis.total_frames
+                    }
+                    
+                    total_vehicles += video_analysis.total_vehicles
+                
+                # Build comprehensive video data
                 video_info = {
-                    'id': video.id,
+                    'id': str(video.id),
                     'filename': video.filename,
                     'title': video.title or video.filename,
                     'start_time': video.video_start_time.strftime('%H:%M') if video.video_start_time else 'Unknown',
                     'end_time': video.video_end_time.strftime('%H:%M') if video.video_end_time else 'Unknown',
                     'duration': video.duration_seconds or 0,
-                    'vehicle_count': video_analysis.total_vehicles if video_analysis else 0,
                     'processing_status': video.processing_status,
-                    'uploaded_at': video.uploaded_at.isoformat() if video.uploaded_at else None
+                    'uploaded_at': video.uploaded_at.isoformat() if video.uploaded_at else None,
+                    'video_date': video.video_date.isoformat() if video.video_date else None,
+                    
+                    # Include all analysis data
+                    'analysis': analysis_data if video_analysis else None,
+                    'vehicle_count': analysis_data.get('total_vehicles', 0),
+                    'has_analysis': video_analysis is not None
                 }
+                
                 videos_data.append(video_info)
             
+            # Build comprehensive response
             response_data = {
                 'group': {
-                    'id': group.id,
+                    'id': str(group.id),
                     'date': group.date.isoformat(),
                     'time_range': group.get_time_range(),
                     'location': {
                         'id': group.location.id,
                         'display_name': group.location.display_name,
-                        'name': group.location.name
+                        'name': group.location.name,
+                        'processing_profile': {
+                            'id': group.location.processing_profile.id,
+                            'name': group.location.processing_profile.display_name,
+                            'detector_type': group.location.processing_profile.detector_type
+                        } if group.location.processing_profile else None
                     }
                 },
                 'videos': videos_data,
                 'summary': {
                     'total_videos': len(videos_data),
-                    'total_vehicles': sum(video['vehicle_count'] for video in videos_data),
-                    'time_range': group.get_time_range()
+                    'total_vehicles': total_vehicles,
+                    'time_range': group.get_time_range(),
+                    'videos_with_analysis': sum(1 for v in videos_data if v['has_analysis']),
+                    'average_vehicles_per_video': round(total_vehicles / len(videos_data)) if len(videos_data) > 0 else 0
                 }
             }
             
-            print(f"✅ [LocationGroupVideosAPI] Successfully returning {len(videos_data)} videos")
+            print(f"✅ [LocationGroupVideosAPI] Successfully returning {len(videos_data)} videos with full analysis data")
             return Response(response_data)
             
         except LocationDateGroup.DoesNotExist:
@@ -1608,6 +1695,7 @@ class LocationGroupDetailAPI(APIView):
             print(f"Error getting group detail: {e}")
             return Response({'error': str(e)}, status=500)
 
+
 class CreateLocationGroupAPI(APIView):
     """Create a new location group"""
     
@@ -1617,7 +1705,8 @@ class CreateLocationGroupAPI(APIView):
             group = serializer.save()
             return Response(LocationDateGroupSerializer(group).data, status=201)
         return Response(serializer.errors, status=400)
-    
+
+
 class LocationGroupsWithVideosAPI(APIView):
     """Get location groups with their videos - SIMPLIFIED VERSION with filtering"""
     
@@ -1668,7 +1757,6 @@ class LocationGroupsWithVideosAPI(APIView):
                     Q(date__icontains=search_term) |
                     Q(videos__filename__icontains=search_term) |
                     Q(location__display_name__icontains=search_term) # Also search location name
-                    # Note: Searching total_vehicles calculated later is complex here
                 ).distinct()
                 print(f"   🔍 Applying search filter: '{search_term}'")
 
@@ -1712,7 +1800,7 @@ class LocationGroupsWithVideosAPI(APIView):
                     'video_count': group.videos.count(),
                     'total_vehicles': total_vehicles,
                     'time_range': group.get_time_range(),
-                    'created_at': group.created_at.isoformat(), # Add this for sorting/filtering context if needed
+                    'created_at': group.created_at.isoformat(),
                     'videos': videos_data
                 })
             
@@ -1724,7 +1812,8 @@ class LocationGroupsWithVideosAPI(APIView):
             import traceback
             traceback.print_exc()
             return Response({'error': str(e)}, status=500)
-        
+
+
 class AutoGroupVideosAPI(APIView):
     """Automatically group all ungrouped videos"""
     
@@ -1791,7 +1880,8 @@ class AutoGroupVideosAPI(APIView):
             return Response({
                 'error': f'Auto-grouping failed: {str(e)}'
             }, status=500)
-        
+
+
 class VideoManagementAPI(APIView):
     """Handle video metadata updates and management - FIXED VERSION"""
     
@@ -1909,6 +1999,7 @@ class VideoManagementAPI(APIView):
         except Exception as e:
             print(f"⚠️ Warning: Could not update video grouping: {e}")
 
+
 class VideoDeleteAPI(APIView):
     """
     DELETE /api/videos/{video_id}/
@@ -1966,7 +2057,8 @@ class VideoDeleteAPI(APIView):
                 {'error': f'Error deleting video: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-        
+
+
 class DebugURLsAPI(APIView):
     """Debug endpoint to check all registered URLs - FIXED VERSION"""
     
@@ -2003,7 +2095,8 @@ class DebugURLsAPI(APIView):
             'total_api_urls': len(api_urls),
             'urls': api_urls
         })
-    
+
+
 class SimpleGroupVideosAPI(APIView):
     """Simple endpoint to get group videos without location verification"""
     
@@ -2047,3 +2140,632 @@ class SimpleGroupVideosAPI(APIView):
             return Response({'error': 'Group not found'}, status=404)
         except Exception as e:
             return Response({'error': str(e)}, status=500)
+
+
+class SessionVideoAnalysesAPI(APIView):
+    """Get all video analyses for a session/group"""
+    
+    def get(self, request, group_id):
+        try:
+            group = LocationDateGroup.objects.get(id=group_id)
+            videos = group.videos.filter(processing_status='completed')
+            
+            analyses_data = []
+            for video in videos:
+                try:
+                    analysis = TrafficAnalysis.objects.get(video_file=video)
+                    # Get vehicle breakdown
+                    vehicle_breakdown = analysis.get_vehicle_breakdown()
+                    
+                    # Get model info and analysis type
+                    model_info = analysis.get_model_info()
+                    
+                    analyses_data.append({
+                        'id': str(analysis.id),
+                        'video_file_id': str(video.id),
+                        'total_vehicles': analysis.total_vehicles,
+                        'processing_time_seconds': analysis.processing_time_seconds,
+                        'congestion_level': analysis.congestion_level,
+                        'traffic_pattern': analysis.traffic_pattern,
+                        'car_count': analysis.car_count,
+                        'truck_count': analysis.truck_count,
+                        'motorcycle_count': analysis.motorcycle_count,
+                        'bus_count': analysis.bus_count,
+                        'bicycle_count': analysis.bicycle_count,
+                        'other_count': analysis.other_count,
+                        'directional_count': analysis.directional_count,
+                        'directional_vehicles_per_minute': analysis.directional_vehicles_per_minute,
+                        'peak_directional_flow': analysis.peak_directional_flow,
+                        'congestion_events_count': analysis.congestion_events_count,
+                        'total_congestion_time': analysis.total_congestion_time,
+                        'vehicle_breakdown': vehicle_breakdown,
+                        'metrics_summary': analysis.metrics_summary or {},
+                        'model_info': model_info,
+                        'analysis_type': analysis.get_analysis_type(),
+                        'direction_info': analysis.get_direction_info(),
+                        'video_info': {
+                            'id': str(video.id),
+                            'filename': video.filename,
+                            'title': video.title,
+                            'start_time': video.video_start_time.strftime('%H:%M') if video.video_start_time else None,
+                            'end_time': video.video_end_time.strftime('%H:%M') if video.video_end_time else None,
+                            'duration': video.duration_seconds,
+                            'uploaded_at': video.uploaded_at,
+                            'processing_profile': video.get_processing_profile_info()
+                        }
+                    })
+                except TrafficAnalysis.DoesNotExist:
+                    # Video exists but no analysis yet
+                    analyses_data.append({
+                        'video_info': {
+                            'id': str(video.id),
+                            'filename': video.filename,
+                            'title': video.title,
+                            'start_time': video.video_start_time.strftime('%H:%M') if video.video_start_time else None,
+                            'end_time': video.video_end_time.strftime('%H:%M') if video.video_end_time else None,
+                            'duration': video.duration_seconds,
+                            'uploaded_at': video.uploaded_at,
+                            'processing_profile': video.get_processing_profile_info()
+                        },
+                        'total_vehicles': 0,
+                        'congestion_level': 'unknown',
+                        'analysis_type': 'no_analysis'
+                    })
+            
+            return Response(analyses_data)
+            
+        except LocationDateGroup.DoesNotExist:
+            return Response({'error': 'Session not found'}, status=404)
+
+
+class DirectionalAnalysisAPI(APIView):
+    """Get directional analysis data for videos"""
+    
+    def get(self, request, video_id):
+        try:
+            video = VideoFile.objects.get(id=video_id)
+            
+            if not hasattr(video, 'traffic_analysis'):
+                return Response({'error': 'No analysis data available'}, status=404)
+            
+            analysis = video.traffic_analysis
+            model_info = analysis.get_model_info()
+            
+            # Get processing profile info
+            profile_info = video.get_processing_profile_info()
+            
+            # Get directional counts from detection data
+            directional_detections = Detection.objects.filter(
+                video_file=video,
+                counted_directionally=True
+            ).count()
+            
+            # Get detailed directional analysis if available
+            directional_analyses = DirectionalAnalysis.objects.filter(
+                traffic_analysis=analysis
+            )
+            
+            directional_details = []
+            for da in directional_analyses:
+                directional_details.append({
+                    'direction_name': da.direction_name,
+                    'direction_angle': da.direction_angle,
+                    'total_count': da.get_total_count(),
+                    'car_count': da.directional_car_count,
+                    'truck_count': da.directional_truck_count,
+                    'motorcycle_count': da.directional_motorcycle_count,
+                    'bus_count': da.directional_bus_count,
+                    'bicycle_count': da.directional_bicycle_count
+                })
+            
+            response_data = {
+                'video_id': str(video.id),
+                'filename': video.filename,
+                'total_vehicles': analysis.total_vehicles,
+                'directional_count': analysis.directional_count,
+                'detection_based_directional': directional_detections,
+                'directional_vehicles_per_minute': analysis.directional_vehicles_per_minute,
+                'peak_directional_flow': analysis.peak_directional_flow,
+                'model_info': model_info,
+                'processing_profile': profile_info,
+                'analysis_type': analysis.get_analysis_type(),
+                'direction_info': analysis.get_direction_info(),
+                'directional_details': directional_details,
+                'has_directional_data': analysis.directional_count > 0,
+                'directional_percentage': (analysis.directional_count / analysis.total_vehicles * 100) if analysis.total_vehicles > 0 else 0
+            }
+            
+            return Response(response_data)
+            
+        except VideoFile.DoesNotExist:
+            return Response({'error': 'Video not found'}, status=404)
+
+
+class CongestionAnalysisAPI(APIView):
+    """Get congestion analysis data for videos"""
+    
+    def get(self, request, video_id):
+        try:
+            video = VideoFile.objects.get(id=video_id)
+            
+            if not hasattr(video, 'traffic_analysis'):
+                return Response({'error': 'No analysis data available'}, status=404)
+            
+            analysis = video.traffic_analysis
+            congestion_summary = analysis.get_congestion_summary()
+            
+            # Get detailed congestion events
+            detailed_events = CongestionEvent.objects.filter(
+                traffic_analysis=analysis
+            ).order_by('start_time_seconds')
+            
+            events_data = []
+            for event in detailed_events:
+                events_data.append({
+                    'id': str(event.id),
+                    'level': event.level,
+                    'start_time': event.start_time_seconds,
+                    'end_time': event.end_time_seconds,
+                    'duration': event.duration_seconds,
+                    'peak_vehicles': event.peak_vehicles,
+                    'average_vehicles': event.average_vehicles,
+                    'stationary_vehicles': event.stationary_vehicles,
+                    'details': event.details or {}
+                })
+            
+            # Get congestion level breakdown
+            congestion_breakdown = {
+                'none': analysis.congestion_none_time,
+                'light': analysis.congestion_light_time,
+                'moderate': analysis.congestion_moderate_time,
+                'heavy': analysis.congestion_heavy_time,
+                'severe': analysis.congestion_severe_time
+            }
+            
+            response_data = {
+                'video_id': str(video.id),
+                'filename': video.filename,
+                'congestion_summary': congestion_summary,
+                'congestion_events': events_data,
+                'congestion_breakdown': congestion_breakdown,
+                'total_congestion_time': analysis.total_congestion_time,
+                'congestion_percentage': analysis.congestion_percentage,
+                'dominant_congestion_level': analysis.congestion_level,
+                'total_congestion_events': analysis.congestion_events_count,
+                'has_congestion_data': analysis.total_congestion_time > 0,
+                'processing_profile': video.get_processing_profile_info()
+            }
+            
+            return Response(response_data)
+            
+        except VideoFile.DoesNotExist:
+            return Response({'error': 'Video not found'}, status=404)
+
+
+class VideoAnalyticsDashboardAPI(APIView):
+    """Get comprehensive analytics data for dashboard"""
+    
+    def get(self, request):
+        try:
+            # Get overall statistics
+            total_videos = VideoFile.objects.count()
+            processed_videos = VideoFile.objects.filter(processing_status='completed').count()
+            processing_videos = VideoFile.objects.filter(processing_status='processing').count()
+            pending_videos = VideoFile.objects.filter(processing_status='pending').count()
+            
+            # Get total vehicles across all analyses
+            vehicle_stats = TrafficAnalysis.objects.aggregate(
+                total_vehicles=Sum('total_vehicles'),
+                directional_count=Sum('directional_count'),
+                congestion_events=Sum('congestion_events_count')
+            )
+            
+            total_vehicles = vehicle_stats['total_vehicles'] or 0
+            directional_total = vehicle_stats['directional_count'] or 0
+            total_congestion_events = vehicle_stats['congestion_events'] or 0
+            
+            # Get recent analyses with more details
+            recent_analyses = TrafficAnalysis.objects.select_related(
+                'video_file', 'location', 'video_file__processing_profile'
+            ).order_by('-analyzed_at')[:10]
+            
+            recent_data = []
+            for analysis in recent_analyses:
+                model_info = analysis.get_model_info()
+                recent_data.append({
+                    'id': str(analysis.id),
+                    'video_filename': analysis.video_file.filename,
+                    'video_title': analysis.video_file.title or analysis.video_file.filename,
+                    'location': analysis.location.display_name if analysis.location else 'Unknown',
+                    'total_vehicles': analysis.total_vehicles,
+                    'directional_count': analysis.directional_count,
+                    'congestion_level': analysis.congestion_level,
+                    'traffic_pattern': analysis.traffic_pattern,
+                    'analyzed_at': analysis.analyzed_at.isoformat(),
+                    'processing_time': analysis.processing_time_seconds,
+                    'detector_type': model_info.get('detector_type', 'Unknown'),
+                    'is_directional': model_info.get('is_directional', False),
+                    'is_congestion': model_info.get('is_congestion', False)
+                })
+            
+            # Get video processing status distribution
+            status_distribution = {}
+            for status_choice in VideoFile._meta.get_field('processing_status').choices:
+                status_code = status_choice[0]
+                count = VideoFile.objects.filter(processing_status=status_code).count()
+                status_distribution[status_code] = {
+                    'count': count,
+                    'percentage': (count / total_videos * 100) if total_videos > 0 else 0
+                }
+            
+            # Get detector type distribution
+            detector_distribution = {}
+            analyses_with_profile = TrafficAnalysis.objects.filter(
+                video_file__processing_profile__isnull=False
+            ).select_related('video_file__processing_profile')
+            
+            for analysis in analyses_with_profile:
+                if analysis.video_file.processing_profile:
+                    detector_type = analysis.video_file.processing_profile.detector_type
+                    detector_distribution[detector_type] = detector_distribution.get(detector_type, 0) + 1
+            
+            # Calculate processing efficiency
+            total_processing_time = TrafficAnalysis.objects.aggregate(
+                total=Sum('processing_time_seconds')
+            )['total'] or 0
+            
+            avg_processing_time = (total_processing_time / processed_videos) if processed_videos > 0 else 0
+            
+            response_data = {
+                'overall_stats': {
+                    'total_videos': total_videos,
+                    'processed_videos': processed_videos,
+                    'processing_videos': processing_videos,
+                    'pending_videos': pending_videos,
+                    'total_vehicles': total_vehicles,
+                    'directional_vehicles': directional_total,
+                    'total_congestion_events': total_congestion_events,
+                    'processing_completion_rate': (processed_videos / total_videos * 100) if total_videos > 0 else 0,
+                    'avg_processing_time_seconds': round(avg_processing_time, 2)
+                },
+                'status_distribution': status_distribution,
+                'detector_distribution': detector_distribution,
+                'recent_analyses': recent_data,
+                'system_health': {
+                    'videos_processed_today': VideoFile.objects.filter(
+                        processed_at__date=timezone.now().date(),
+                        processing_status='completed'
+                    ).count(),
+                    'avg_vehicles_per_video': round(total_vehicles / processed_videos, 2) if processed_videos > 0 else 0,
+                    'directional_ratio': round(directional_total / total_vehicles * 100, 2) if total_vehicles > 0 else 0
+                }
+            }
+            
+            return Response(response_data)
+            
+        except Exception as e:
+            print(f"Error in analytics dashboard: {e}")
+            import traceback
+            traceback.print_exc()
+            return Response({'error': str(e)}, status=500)
+
+
+class SystemHealthAPI(APIView):
+    """Check system health and ML model availability"""
+    
+    def get(self, request):
+        try:
+            import sys
+            
+            # Check Python dependencies
+            python_version = sys.version.split()[0]  # Get just version number
+            
+            # Check database connectivity
+            db_available = True
+            try:
+                from django.db import connection
+                connection.ensure_connection()
+                # Test a simple query
+                VideoFile.objects.count()
+            except Exception:
+                db_available = False
+            
+            # Check Celery
+            celery_available = True
+            try:
+                from celery import current_app
+                insp = current_app.control.inspect()
+                celery_available = insp is not None and insp.active() is not None
+            except Exception:
+                celery_available = False
+            
+            # Check file system
+            import tempfile
+            import shutil
+            fs_available = True
+            fs_warning = None
+            
+            try:
+                # Check write access to media directories
+                media_dirs = ['media/videos', 'media/processed_videos']
+                for dir_path in media_dirs:
+                    if not os.path.exists(dir_path):
+                        os.makedirs(dir_path, exist_ok=True)
+                    
+                    # Test write access
+                    test_file = os.path.join(dir_path, '.write_test')
+                    try:
+                        with open(test_file, 'w') as f:
+                            f.write('test')
+                        os.remove(test_file)
+                    except Exception as e:
+                        fs_warning = f"Cannot write to {dir_path}: {str(e)}"
+                        fs_available = False
+                        break
+                        
+            except Exception as e:
+                fs_available = False
+                fs_warning = str(e)
+            
+            # Check disk space
+            disk_space_warning = None
+            try:
+                import shutil
+                total, used, free = shutil.disk_usage(".")
+                free_gb = free / (1024**3)
+                if free_gb < 5:  # Less than 5GB free
+                    disk_space_warning = f"Low disk space: {free_gb:.2f}GB free"
+            except Exception:
+                pass
+            
+            # Get system statistics
+            total_videos = VideoFile.objects.count()
+            processed_videos = VideoFile.objects.filter(processing_status='completed').count()
+            
+            health_data = {
+                'status': 'healthy',
+                'timestamp': timezone.now().isoformat(),
+                'system_info': {
+                    'python_version': python_version,
+                    'server_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+                },
+                'components': {
+                    'python': {
+                        'version': python_version,
+                        'status': 'ok'
+                    },
+                    'database': {
+                        'available': db_available,
+                        'status': 'ok' if db_available else 'error'
+                    },
+                    'celery': {
+                        'available': celery_available,
+                        'status': 'ok' if celery_available else 'warning'
+                    },
+                    'filesystem': {
+                        'available': fs_available,
+                        'warning': fs_warning,
+                        'status': 'ok' if fs_available else 'error'
+                    }
+                },
+                'system_stats': {
+                    'total_videos': total_videos,
+                    'processed_videos': processed_videos,
+                    'processing_rate': f"{(processed_videos / total_videos * 100):.1f}%" if total_videos > 0 else "0%"
+                },
+                'recommendations': []
+            }
+            
+            # Add recommendations based on health status
+            if not celery_available:
+                health_data['recommendations'].append('Celery not running - background processing unavailable')
+            if fs_warning:
+                health_data['recommendations'].append(f'Filesystem issue: {fs_warning}')
+            if disk_space_warning:
+                health_data['recommendations'].append(disk_space_warning)
+            
+            # Add additional health checks
+            if total_videos > 0 and processed_videos == 0:
+                health_data['recommendations'].append('No videos have been processed yet - check processing configuration')
+            
+            # Check for recent processing errors
+            recent_errors = VideoFile.objects.filter(
+                processing_status='failed',
+                last_progress_update__gte=timezone.now() - timedelta(hours=24)
+            ).count()
+            
+            if recent_errors > 0:
+                health_data['recommendations'].append(f'{recent_errors} video processing failures in last 24 hours')
+            
+            return Response(health_data)
+            
+        except Exception as e:
+            print(f"Error in system health check: {e}")
+            import traceback
+            traceback.print_exc()
+            return Response({
+                'status': 'unhealthy',
+                'error': str(e),
+                'timestamp': timezone.now().isoformat()
+            }, status=500)
+
+# ==================== AUTHENTICATION ENDPOINTS ====================
+
+class LoginAPI(APIView):
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        username = request.data.get('username')
+        password = request.data.get('password')
+        remember_me = request.data.get('remember_me', False)
+        
+        if not username or not password:
+            return Response(
+                {'success': False, 'message': 'Username and password required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        user = authenticate(username=username, password=password)
+        
+        if user is not None:
+            if not user.is_active:
+                return Response(
+                    {'success': False, 'message': 'Account is disabled'},
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+            
+            # Create or get token
+            token, created = Token.objects.get_or_create(user=user)
+            
+            login(request, user)
+            
+            # Set session expiry based on remember_me
+            if remember_me:
+                request.session.set_expiry(1209600)  # 2 weeks
+            else:
+                request.session.set_expiry(86400)  # 24 hours
+            
+            print(f"User {username} logged in successfully")
+            
+            return Response({
+                'success': True,
+                'message': 'Login successful',
+                'token': token.key,
+                'user': {
+                    'id': user.id,
+                    'username': user.username,
+                    'email': user.email,
+                    'first_name': user.first_name,
+                    'last_name': user.last_name,
+                    'is_staff': user.is_staff,
+                    'is_superuser': user.is_superuser,
+                    'date_joined': user.date_joined.strftime('%Y-%m-%d %H:%M:%S'),
+                }
+            })
+        else:
+            print(f"Failed login attempt for username: {username}")
+            return Response(
+                {'success': False, 'message': 'Invalid username or password'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+
+class LogoutAPI(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        user = request.user
+        username = user.username
+        
+        # Delete the token
+        try:
+            request.user.auth_token.delete()
+        except (AttributeError, Token.DoesNotExist):
+            pass
+        
+        logout(request)
+        
+        print(f"User {username} logged out")
+        
+        return Response({
+            'success': True,
+            'message': 'Logout successful'
+        })
+
+
+class CurrentUserAPI(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        user = request.user
+        return Response({
+            'id': user.id,
+            'username': user.username,
+            'email': user.email,
+            'first_name': user.first_name,
+            'last_name': user.last_name,
+            'is_staff': user.is_staff,
+            'is_superuser': user.is_superuser,
+            'date_joined': user.date_joined.strftime('%Y-%m-%d %H:%M:%S'),
+            'last_login': user.last_login.strftime('%Y-%m-%d %H:%M:%S') if user.last_login else None,
+        })
+
+
+class RegisterAPI(APIView):
+    """Simple registration (can be disabled in production)"""
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        username = request.data.get('username')
+        email = request.data.get('email')
+        password = request.data.get('password')
+        first_name = request.data.get('first_name', '')
+        last_name = request.data.get('last_name', '')
+        
+        if not username or not password or not email:
+            return Response({
+                'success': False,
+                'message': 'Username, email, and password are required'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        if User.objects.filter(username=username).exists():
+            return Response({
+                'success': False,
+                'message': 'Username already exists'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            user = User.objects.create_user(
+                username=username,
+                email=email,
+                password=password,
+                first_name=first_name,
+                last_name=last_name,
+                is_active=True
+            )
+            
+            # Create auth token
+            token = Token.objects.create(user=user)
+            
+            return Response({
+                'success': True,
+                'message': 'User registered successfully',
+                'token': token.key,
+                'user': {
+                    'id': user.id,
+                    'username': user.username,
+                    'email': user.email,
+                    'first_name': user.first_name,
+                    'last_name': user.last_name,
+                    'is_staff': user.is_staff,
+                    'is_superuser': user.is_superuser,
+                }
+            }, status=status.HTTP_201_CREATED)
+                
+        except Exception as e:
+            print(f"Error registering user: {e}")
+            return Response({
+                'success': False,
+                'message': f'Registration failed: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class CheckAuthAPI(APIView):
+    """Check if user is authenticated"""
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        if request.user.is_authenticated:
+            return Response({
+                'authenticated': True,
+                'user': {
+                    'id': request.user.id,
+                    'username': request.user.username,
+                    'email': request.user.email,
+                    'is_staff': request.user.is_staff,
+                }
+            })
+        else:
+            return Response({
+                'authenticated': False
+            })

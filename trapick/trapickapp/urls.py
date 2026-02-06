@@ -1,10 +1,12 @@
-# trapickapp/urls.py
+# trapickapp/urls.py - REORGANIZED AND CLEANED
 from django.urls import path, re_path
 from . import api_views
 
 urlpatterns = [
     # ==================== VIDEO PROCESSING ENDPOINTS ====================
-    #path('api/upload/video/', api_views.VideoUploadAPI.as_view(), name='upload_video'),
+    path('api/upload/video/', api_views.VideoUploadAPI.as_view(), name='upload_video'),
+    path('api/progress/<uuid:video_id>/', api_views.VideoProgressAPI.as_view(), name='video_progress'),
+    path('api/progress/active/', api_views.ActiveVideosProgressAPI.as_view(), name='active_progress'),
     path('api/analysis/<uuid:upload_id>/', api_views.AnalysisResultsAPI.as_view(), name='analysis_results'),
 
     # ==================== VIDEO FILE SERVING ====================
@@ -14,7 +16,7 @@ urlpatterns = [
 
     # ==================== VIDEO MANAGEMENT ====================
     path('api/videos/', api_views.VideoListAPI.as_view(), name='video_list'),
-    #path('api/videos/<uuid:video_id>/manage/', api_views.VideoManagementAPI.as_view(), name='video_manage'),
+    path('api/videos/<uuid:video_id>/manage/', api_views.VideoManagementAPI.as_view(), name='video_manage'),
     path('api/videos/<uuid:video_id>/delete/', api_views.VideoDeleteAPI.as_view(), name='video_delete'),
     path('api/videos/ungrouped/', api_views.UngroupedVideosAPI.as_view(), name='ungrouped_videos'),
 
@@ -38,18 +40,13 @@ urlpatterns = [
     path('api/groups/<uuid:group_id>/analysis/', api_views.GroupAnalysisDetailAPI.as_view(), name='group_analysis_detail'),
 
     # ==================== PROCESSING PROFILES ====================
-    #path('api/processing-profiles/', api_views.ProcessingProfileListAPI.as_view(), name='processing_profile_list'),
-    #path('api/processing-profiles/<int:profile_id>/', api_views.ProcessingProfileDetailAPI.as_view(), name='processing_profile_detail'),
+    path('api/processing-profiles/', api_views.ProcessingProfileListAPI.as_view(), name='processing_profile_list'),
+    path('api/processing-profiles/<int:profile_id>/', api_views.ProcessingProfileDetailAPI.as_view(), name='processing_profile_detail'),
 
     # ==================== DATA & ANALYTICS ENDPOINTS ====================
     path('api/analyze/', api_views.AnalysisOverviewAPI.as_view(), name='analysis_overview'),
     path('api/vehicles/', api_views.VehicleStatsAPI.as_view(), name='vehicle_stats'),
     path('api/congestion/', api_views.CongestionDataAPI.as_view(), name='congestion_data'),
-
-    # ==================== EXPORT ENDPOINTS ====================
-    path('api/export/<uuid:video_id>/csv/', api_views.ExportAnalysisCSVAPI.as_view(), name='export_csv'),
-    path('api/export/<uuid:video_id>/pdf/', api_views.ExportAnalysisPDFAPI.as_view(), name='export_pdf'),
-    path('api/export/<uuid:video_id>/excel/', api_views.ExportAnalysisExcelAPI.as_view(), name='export_excel'),
 
     # ==================== PREDICTION ENDPOINTS ====================
     path('api/predictions/generate/', api_views.GeneratePredictionsAPI.as_view(), name='generate_predictions'),
@@ -64,4 +61,13 @@ urlpatterns = [
     path('api/groups/<uuid:group_id>/videos/simple/', 
      api_views.SimpleGroupVideosAPI.as_view(), 
      name='simple_group_videos'),
+    path('api/debug/progress-store/', api_views.DebugProgressStoreAPI.as_view(), name='debug-progress-store'),
+    path('api/debug/websocket-test/<uuid:video_id>/', api_views.DebugWebSocketTestAPI.as_view(), name='debug-websocket-test'),
+    path('api/sessions/<uuid:group_id>/video-analyses/', api_views.SessionVideoAnalysesAPI.as_view(), name='session-video-analyses'),
+    # ==================== AUTHENTICATION ENDPOINTS ====================
+    path('api/auth/login/', api_views.LoginAPI.as_view(), name='login'),
+    path('api/auth/logout/', api_views.LogoutAPI.as_view(), name='logout'),
+    path('api/auth/current-user/', api_views.CurrentUserAPI.as_view(), name='current_user'),
+    path('api/auth/register/', api_views.RegisterAPI.as_view(), name='register'),
+    path('api/auth/check-auth/', api_views.CheckAuthAPI.as_view(), name='check_auth'),
 ]

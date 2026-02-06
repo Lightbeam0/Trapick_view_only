@@ -1,5 +1,5 @@
 // src/pages/TrafficPredictions.js
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 
 const TrafficPredictions = () => {
@@ -16,29 +16,6 @@ const TrafficPredictions = () => {
     setSelectedDate(tomorrow.toISOString().split('T')[0]);
   }, []);
 
-  const fetchPredictions = useCallback(async () => {
-    if (!selectedDate) return;
-    
-    setLoading(true);
-    try {
-      const response = await axios.get(`http://127.0.0.1:8000/api/predictions/?date=${selectedDate}`);
-      setPredictions(response.data.predictions);
-    } catch (error) {
-      console.error('Error fetching predictions:', error);
-    } finally {
-      setLoading(false);
-    }
-  }, [selectedDate]);
-
-  const fetchInsights = async () => {
-    try {
-      const response = await axios.get('http://127.0.0.1:8000/api/predictions/insights/');
-      setInsights(response.data);
-    } catch (error) {
-      console.error('Error fetching insights:', error);
-    }
-  };
-
   const generatePredictions = async () => {
     setGenerating(true);
     try {
@@ -54,10 +31,33 @@ const TrafficPredictions = () => {
     }
   };
 
+  const fetchPredictions = async () => {
+    if (!selectedDate) return;
+    
+    setLoading(true);
+    try {
+      const response = await axios.get(`http://127.0.0.1:8000/api/predictions/?date=${selectedDate}`);
+      setPredictions(response.data.predictions);
+    } catch (error) {
+      console.error('Error fetching predictions:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchInsights = async () => {
+    try {
+      const response = await axios.get('http://127.0.0.1:8000/api/predictions/insights/');
+      setInsights(response.data);
+    } catch (error) {
+      console.error('Error fetching insights:', error);
+    }
+  };
+
   useEffect(() => {
     fetchPredictions();
     fetchInsights();
-  }, [selectedDate, fetchPredictions]);
+  }, [selectedDate]);
 
   const getCongestionColor = (level) => {
     const colors = {

@@ -147,3 +147,6 @@ if not DEBUG:
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# Sync API Configuration
+SYNC_API_KEY = os.environ.get('SYNC_API_KEY', 'change-this-in-production')

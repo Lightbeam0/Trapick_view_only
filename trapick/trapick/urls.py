@@ -6,10 +6,13 @@ from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import include, path, re_path
 from django.views.generic import TemplateView
+from trapickapp.sync_api import DataSyncAPI, SyncHealthCheck
 
 urlpatterns = [
     path("admin/", admin.site.urls),
     path('api/', include("trapickapp.urls")),
+    path('api/sync-data/', DataSyncAPI.as_view(), name='sync-data'),
+    path('api/sync-health/', SyncHealthCheck.as_view(), name='sync-health'),
     
     # Serve React app for all non-static, non-api routes
     re_path(r'^(?!static/|api/|admin/).*', TemplateView.as_view(template_name='index.html')),

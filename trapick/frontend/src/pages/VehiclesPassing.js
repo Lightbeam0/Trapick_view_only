@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback } from "react";
+//src/pages/VehiclesPassing.js
+import React, { useState, useEffect } from "react";
 import axios from "axios";
 import { Bar, Pie } from "react-chartjs-2";
 import { 
@@ -31,6 +32,11 @@ function VehiclesPassing() {
   const [locations, setLocations] = useState([]);
   const [dateRange, setDateRange] = useState("last_7_days");
 
+  useEffect(() => {
+    fetchVehicleData();
+    fetchLocations();
+  }, [timePeriod, locationFilter, dateRange]);
+
   const fetchLocations = async () => {
     try {
       const response = await axios.get("http://127.0.0.1:8000/api/locations/");
@@ -40,7 +46,7 @@ function VehiclesPassing() {
     }
   };
 
-  const fetchVehicleData = useCallback(async () => {
+  const fetchVehicleData = async () => {
     try {
       setLoading(true);
       console.log("🔄 Fetching vehicle data with filters:", { timePeriod, locationFilter, dateRange });
@@ -107,12 +113,7 @@ function VehiclesPassing() {
     } finally {
       setLoading(false);
     }
-  }, [timePeriod, locationFilter, dateRange]);
-
-  useEffect(() => {
-    fetchVehicleData();
-    fetchLocations();
-  }, [timePeriod, locationFilter, dateRange, fetchVehicleData]);
+  };
 
   const calculateChange = (current, previous) => {
     if (!previous || previous === 0) return { value: 0, isPositive: true };
@@ -221,7 +222,7 @@ function VehiclesPassing() {
     <div className="main-content">
       <header style={{ marginBottom: '32px' }}>
         <h1 style={{ fontSize: '32px', fontWeight: 'bold', color: '#2d3748', margin: '0 0 8px 0' }}>
-          Vehicle Analytics
+          Vehicle Composition Analysis
         </h1>
         <p style={{ color: '#666', margin: 0 }}>Detailed breakdown of vehicle types from traffic analysis</p>
       </header>
@@ -243,7 +244,7 @@ function VehiclesPassing() {
       <div className="dashboard-card" style={{ marginBottom: '24px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
           <h2 style={{ fontSize: '20px', fontWeight: '600', color: '#2d3748', margin: 0 }}>
-            Vehicle Statistics
+            Vehicle Type Distribution
           </h2>
           <button 
             onClick={fetchVehicleData}
