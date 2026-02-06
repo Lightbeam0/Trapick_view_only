@@ -66,7 +66,8 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.authtoken.models import Token
 
 
-
+import logging
+logger = logging.getLogger(__name__)
 
 
 
