@@ -4,7 +4,6 @@ from . import api_views
 
 urlpatterns = [
     # ==================== VIDEO PROCESSING ENDPOINTS ====================
-    path('api/upload/video/', api_views.VideoUploadAPI.as_view(), name='upload_video'),
     path('api/progress/<uuid:video_id>/', api_views.VideoProgressAPI.as_view(), name='video_progress'),
     path('api/progress/active/', api_views.ActiveVideosProgressAPI.as_view(), name='active_progress'),
     path('api/analysis/<uuid:upload_id>/', api_views.AnalysisResultsAPI.as_view(), name='analysis_results'),
@@ -61,8 +60,6 @@ urlpatterns = [
     path('api/groups/<uuid:group_id>/videos/simple/', 
      api_views.SimpleGroupVideosAPI.as_view(), 
      name='simple_group_videos'),
-    path('api/debug/progress-store/', api_views.DebugProgressStoreAPI.as_view(), name='debug-progress-store'),
-    path('api/debug/websocket-test/<uuid:video_id>/', api_views.DebugWebSocketTestAPI.as_view(), name='debug-websocket-test'),
     path('api/sessions/<uuid:group_id>/video-analyses/', api_views.SessionVideoAnalysesAPI.as_view(), name='session-video-analyses'),
     # ==================== AUTHENTICATION ENDPOINTS ====================
     path('api/auth/login/', api_views.LoginAPI.as_view(), name='login'),
